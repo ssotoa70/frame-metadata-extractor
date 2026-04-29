@@ -1,0 +1,14 @@
+FROM frame-metadata-extractor:latest
+
+# CNB buildpack does not set these for apt-installed libs. Without them,
+# OpenImageIO fails to load its codec plugins (libopenexr, libtiff, libpng,
+# libopenjp2) at runtime.
+ENV LD_LIBRARY_PATH="/layers/paketo-buildpacks_cpython/cpython/lib:/layers/apt-buildpack/apt/lib/x86_64-linux-gnu:/layers/apt-buildpack/apt/usr/lib/x86_64-linux-gnu:/layers/apt-buildpack/apt/usr/lib"
+ENV PATH="/layers/apt-buildpack/apt/usr/bin:/layers/paketo-buildpacks_cpython/cpython/bin:${PATH}"
+ENV PYTHONPATH="/workspace:/layers/paketo-buildpacks_cpython/cpython/lib/python3.12/site-packages:/layers/paketo-buildpacks_pip-install/packages/lib/python3.12/site-packages"
+
+WORKDIR /workspace
+
+# Bypass the CNB launcher — start the VAST runtime directly with Python.
+ENTRYPOINT ["python3", "-m", "vast_runtime.main"]
+CMD ["--app-path", "/workspace", "--handler", "main.py"]

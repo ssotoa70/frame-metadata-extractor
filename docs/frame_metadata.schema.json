@@ -1,0 +1,475 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ssotoa70/frame-metadata-extractor/blob/main/docs/frame_metadata.schema.json",
+  "title": "Frame Metadata Extractor Payload",
+  "description": "JSON Schema (draft 2020-12) for the output of the frame-metadata-extractor VAST DataEngine function. Covers every supported still-frame format (OpenEXR, DPX, Cineon, TIFF, PNG, TGA, HDR/RGBE, JPEG2000). See FRAMES_METADATA_SCHEMA.MD for field-level prose and sample payloads.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "file",
+    "parts",
+    "channels",
+    "aovs",
+    "attributes",
+    "extraction",
+    "errors"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Output schema version. Bumped when field semantics change."
+    },
+    "file": { "$ref": "#/$defs/FileBlock" },
+    "parts": {
+      "type": "array",
+      "description": "One entry per subimage. Single entry for most formats, multiple for multi-part EXR.",
+      "items": { "$ref": "#/$defs/Part" }
+    },
+    "channels": {
+      "type": "array",
+      "description": "Flat list of channels across all parts. Use part_index to re-associate.",
+      "items": { "$ref": "#/$defs/Channel" }
+    },
+    "aovs": {
+      "type": "array",
+      "description": "Renderer-meaningful AOV groupings derived from channels (beauty, diffuse, AO, depth, normals, cryptomatte, light groups). One entry per AOV per part per view. Non-EXR formats emit one synthetic beauty row.",
+      "items": { "$ref": "#/$defs/Aov" }
+    },
+    "attributes": { "$ref": "#/$defs/AttributesBag" },
+    "color": { "$ref": "#/$defs/ColorBlock" },
+    "timecode": { "$ref": "#/$defs/TimecodeBlock" },
+    "sequence": { "$ref": "#/$defs/SequenceBlock" },
+    "camera": { "$ref": "#/$defs/CameraBlock" },
+    "production": { "$ref": "#/$defs/ProductionBlock" },
+    "extraction": { "$ref": "#/$defs/ExtractionBlock" },
+    "errors": {
+      "type": "array",
+      "description": "Non-fatal parse errors. Empty on the happy path.",
+      "items": { "type": "string" }
+    },
+    "persistence": { "$ref": "#/$defs/PersistenceBlock" },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Only set on early-return error payloads (_error_result); normal successful runs put timing info in extraction.timestamp."
+    }
+  },
+
+  "$defs": {
+    "FileBlock": {
+      "type": "object",
+      "description": "Identity and physical attributes of the frame file.",
+      "required": ["path", "format", "size_bytes"],
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Canonical path — VAST view path (elementpath) when available, otherwise the S3 object key."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "openexr",
+            "dpx",
+            "cineon",
+            "tiff",
+            "png",
+            "targa",
+            "rgbe",
+            "jpeg2000"
+          ]
+        },
+        "s3_bucket": { "type": "string" },
+        "s3_key": { "type": "string" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total file size from the S3 Content-Range header, not the range read."
+        },
+        "mtime": {
+          "type": "string",
+          "description": "Last-modified timestamp in ISO-8601 (may be empty string on older event payloads).",
+          "anyOf": [
+            { "format": "date-time" },
+            { "const": "" }
+          ]
+        },
+        "frame_number": {
+          "type": ["integer", "null"],
+          "description": "Parsed from filename regex [._](\\d{3,8})\\.<ext>$. Null if the filename is not numbered."
+        },
+        "multipart_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of subimages. 1 for single-part formats."
+        },
+        "is_deep": {
+          "type": "boolean",
+          "description": "EXR deep-scanline/tile flag. Always false for non-EXR formats."
+        }
+      }
+    },
+
+    "Part": {
+      "type": "object",
+      "description": "Per-subimage geometry and encoding. Optional fields are omitted when null — the inspector strips None values before emitting.",
+      "required": ["part_index", "width", "height"],
+      "additionalProperties": true,
+      "properties": {
+        "part_index": { "type": "integer", "minimum": 0 },
+        "width": { "type": "integer", "minimum": 0 },
+        "height": { "type": "integer", "minimum": 0 },
+        "display_width": { "type": "integer", "minimum": 0 },
+        "display_height": { "type": "integer", "minimum": 0 },
+        "data_x_offset": { "type": "integer" },
+        "data_y_offset": { "type": "integer" },
+        "part_name": { "type": "string" },
+        "view_name": { "type": "string" },
+        "multi_view": {
+          "description": "EXR multiView attribute; may be a string, list of strings, or boolean depending on OIIO version.",
+          "type": ["boolean", "string", "array", "null"]
+        },
+        "data_window": { "$ref": "#/$defs/Box2i" },
+        "display_window": { "$ref": "#/$defs/Box2i" },
+        "pixel_aspect_ratio": { "type": "number", "exclusiveMinimum": 0 },
+        "line_order": { "type": "string" },
+        "compression": { "type": "string" },
+        "color_space": { "type": "string" },
+        "render_software": { "type": "string" },
+        "is_tiled": { "type": "boolean" },
+        "tile_width": { "type": ["integer", "null"], "minimum": 0 },
+        "tile_height": { "type": ["integer", "null"], "minimum": 0 },
+        "tile_depth": { "type": ["integer", "null"], "minimum": 0 },
+        "is_deep": { "type": "boolean" }
+      }
+    },
+
+    "Box2i": {
+      "type": "object",
+      "description": "Serialized OIIO window/box — integer pixel rectangle.",
+      "required": ["min", "max"],
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": "object",
+          "required": ["x", "y"],
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "integer" },
+            "y": { "type": "integer" }
+          }
+        },
+        "max": {
+          "type": "object",
+          "required": ["x", "y"],
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "integer" },
+            "y": { "type": "integer" }
+          }
+        }
+      }
+    },
+
+    "Channel": {
+      "type": "object",
+      "required": [
+        "part_index",
+        "name",
+        "layer_name",
+        "component_name",
+        "type",
+        "x_sampling",
+        "y_sampling"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "part_index": { "type": "integer", "minimum": 0 },
+        "name": {
+          "type": "string",
+          "description": "Full channel name, e.g. 'R', 'A', 'diffuse.R', 'crypto_object00.R'."
+        },
+        "layer_name": {
+          "type": "string",
+          "description": "Portion before the last '.'. Empty string for flat channels."
+        },
+        "component_name": {
+          "type": "string",
+          "description": "Portion after the last '.'. Equal to name for flat channels."
+        },
+        "type": {
+          "type": "string",
+          "description": "OIIO TypeDesc upper-cased. Commonly HALF, FLOAT, UINT8, UINT16, UINT32.",
+          "examples": ["HALF", "FLOAT", "UINT8", "UINT16", "UINT32"]
+        },
+        "x_sampling": { "type": "integer", "minimum": 1 },
+        "y_sampling": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "Aov": {
+      "type": "object",
+      "description": "Renderer-meaningful AOV grouping. Channels with the same (part_index, name, view) are collapsed into one record. Cryptomatte ranks roll up into a single record with `ranks: N`.",
+      "required": [
+        "name",
+        "part_index",
+        "components",
+        "channel_group",
+        "channel_count",
+        "data_type",
+        "bit_depth",
+        "depth_label",
+        "category",
+        "is_beauty",
+        "is_data",
+        "color_space",
+        "synthetic",
+        "uncompressed_bytes",
+        "pct_of_frame_logical"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "description": "AOV name (e.g. 'beauty', 'diffuse', 'uCryptoObject', 'motion_vec')." },
+        "part_index": { "type": "integer", "minimum": 0 },
+        "view": {
+          "type": ["string", "null"],
+          "description": "EXR view name (e.g. 'left', 'right' for stereo); null when not part of a multi-view file."
+        },
+        "components": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Canonicalized component order (R,G,B,A; X,Y,Z; U,V) — not EXR's alphabetical storage order."
+        },
+        "channel_group": {
+          "type": "string",
+          "description": "UI label: RGBA / RGB / XYZ / UV / Z / R / single component / +-joined fallback."
+        },
+        "channel_count": { "type": "integer", "minimum": 1 },
+        "data_type": {
+          "type": "string",
+          "description": "Dominant pixel type (HALF / FLOAT / UINT8 / UINT16 / UINT32). Equal to 'MIXED' if components have heterogeneous types."
+        },
+        "bit_depth": { "type": "integer", "enum": [8, 16, 32, 64] },
+        "depth_label": {
+          "type": "string",
+          "description": "UI label: '16f' / '32f' / '8u' / '16u' / 'MIXED'."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["beauty", "light_group", "utility", "matte", "crypto", "denoise", "deep", "data"]
+        },
+        "is_beauty": { "type": "boolean" },
+        "is_data": {
+          "type": "boolean",
+          "description": "True for non-color AOVs (data / crypto / matte / deep). Viewers should not apply view transforms to these."
+        },
+        "color_space": {
+          "type": "string",
+          "description": "'raw' for data AOVs; otherwise inherits the part's color_space attribute."
+        },
+        "light_group": {
+          "type": ["string", "null"],
+          "description": "Suffix from <base>_<group> AOV names (e.g. 'diffuse_key' yields light_group: 'key'). Null otherwise."
+        },
+        "synthetic": {
+          "type": "boolean",
+          "description": "True for non-EXR formats with implicit single beauty AOV (DPX, TIFF, PNG, TGA, HDR, JPEG2000, Cineon)."
+        },
+        "uncompressed_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-frame logical size: pixels × channels × bytes_per_channel, honoring per-channel subsampling. Per-AOV compressed bytes are not knowable from EXR headers and are deliberately not pretended."
+        },
+        "pct_of_frame_logical": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "This AOV's share of the frame's total uncompressed footprint, as a percentage. Sum across AOVs lands at 99.9-100.1 due to rounding."
+        },
+        "ranks": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Cryptomatte rank count. Only present on category: 'crypto' rows."
+        }
+      }
+    },
+
+    "AttributesBag": {
+      "type": "object",
+      "description": "Raw attribute bag, one list per part. For DPX, SMPTE 268M fields parsed by dpx_header.py are appended under the 'dpx:' prefix.",
+      "required": ["parts"],
+      "additionalProperties": false,
+      "properties": {
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Attribute" }
+          }
+        }
+      }
+    },
+
+    "Attribute": {
+      "type": "object",
+      "required": ["name", "type", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "type": {
+          "type": "string",
+          "description": "OIIO TypeDesc upper-cased (e.g. STRING, INT, FLOAT, V2F, FLOAT[8], TIMECODE, UINT8[N])."
+        },
+        "value": {
+          "description": "JSON-normalized attribute value. Binary attributes use {encoding:'base64', data:'<b64>'}.",
+          "anyOf": [
+            { "type": "null" },
+            { "type": "boolean" },
+            { "type": "integer" },
+            { "type": "number" },
+            { "type": "string" },
+            { "type": "array" },
+            { "$ref": "#/$defs/Base64Blob" },
+            { "type": "object" }
+          ]
+        }
+      }
+    },
+
+    "Base64Blob": {
+      "type": "object",
+      "description": "Binary attribute payload (e.g. ICC profile).",
+      "required": ["encoding", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "encoding": { "type": "string", "const": "base64" },
+        "data": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/=]*$"
+        }
+      }
+    },
+
+    "ColorBlock": {
+      "type": "object",
+      "description": "Normalized color information derived from the richest attribute source available. Absent keys mean the field could not be derived.",
+      "additionalProperties": false,
+      "properties": {
+        "color_space": { "type": "string" },
+        "transfer_function": { "type": "string" },
+        "primaries": {
+          "description": "CIE xy chromaticities; typically an 8-element list for RGB+white or a string label.",
+          "anyOf": [
+            { "type": "string" },
+            {
+              "type": "array",
+              "items": { "type": "number" },
+              "minItems": 6,
+              "maxItems": 8
+            }
+          ]
+        },
+        "icc_profile_hash": {
+          "type": "string",
+          "description": "Reserved — hex or base64 digest of an embedded ICC profile when present."
+        }
+      }
+    },
+
+    "TimecodeBlock": {
+      "type": "object",
+      "description": "SMPTE timecode when available. For EXR it comes from smpte:TimeCode (may be an object); for DPX it is a decoded HH:MM:SS:FF string.",
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "anyOf": [
+            { "type": "string", "pattern": "^\\d{2}:\\d{2}:\\d{2}[:;]\\d{2}$" },
+            { "type": "object" }
+          ]
+        },
+        "rate": { "type": "number", "exclusiveMinimum": 0 },
+        "drop_frame": { "type": "boolean" }
+      }
+    },
+
+    "SequenceBlock": {
+      "type": "object",
+      "description": "Sequence-level identifiers. frame_number mirrors file.frame_number when present.",
+      "additionalProperties": false,
+      "properties": {
+        "frame_number": { "type": "integer" },
+        "reel": { "type": "string" }
+      }
+    },
+
+    "CameraBlock": {
+      "type": "object",
+      "description": "Camera metadata, populated for formats carrying EXIF (TIFF, JPEG2000) or DPX input-device fields.",
+      "additionalProperties": false,
+      "properties": {
+        "make": { "type": "string" },
+        "model": { "type": "string" },
+        "serial": { "type": "string" },
+        "lens": { "type": "string" },
+        "exposure": { "type": "number" },
+        "fnumber": { "type": "number" },
+        "iso": { "type": ["integer", "number"] },
+        "fps": { "type": "number" }
+      }
+    },
+
+    "ProductionBlock": {
+      "type": "object",
+      "description": "Production-side identifiers. Fields are populated when the format exposes them.",
+      "additionalProperties": false,
+      "properties": {
+        "creator": { "type": "string" },
+        "copyright": { "type": "string" },
+        "description": { "type": "string" },
+        "software": { "type": "string" },
+        "project": { "type": "string" },
+        "shot": { "type": "string" },
+        "scene": { "type": "string" },
+        "take": { "type": "string" },
+        "facility": { "type": "string" }
+      }
+    },
+
+    "ExtractionBlock": {
+      "type": "object",
+      "required": ["tool", "tool_version", "timestamp", "warnings"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "type": "string", "const": "frame-metadata-extractor" },
+        "tool_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "PersistenceBlock": {
+      "type": "object",
+      "description": "Populated by vast_db_persistence.persist_to_vast_database after the handler builds its payload.",
+      "required": ["status"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["success", "skipped", "error"]
+        },
+        "file_id": { "type": ["string", "null"] },
+        "inserted": { "type": "boolean" },
+        "message": { "type": "string" },
+        "error": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
